@@ -1,0 +1,28 @@
+Preface
+
+Part 1: Foundational Knowledge
+1. Transformer Neural Networks
+2. LLMs and Foundation Models
+3. Use Cases and Limitations of Foundation Models
+4. Choosing the Right Model
+Part 2: Overview of Computing Hardware
+1. CPU and Memory Systems
+2. GPUs and Distributed Computing
+3. Networking
+4. Other Accelerators (TPU, FPGA, etc)
+Part 3: Optimization Techniques
+1. Model Optimization
+2. Quantization
+3. Knowledge Distillation
+4. Low-Rank Adaptation (LoRA) and QLoRA
+Part 4: Inference Frameworks
+1. Overview
+2. CUDA
+3. KV Cache Optimization
+4. FlashAttention
+5. Speculative Decoding
+Part 5: Deployment Strategies
+1. On-Premise Deployment
+2. Cloud Deployment
+3. Edge Deployment
+4. Hybrid Deployment
