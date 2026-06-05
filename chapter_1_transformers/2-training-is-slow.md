@@ -30,6 +30,13 @@ When running models on a GPU, memory is not a single contiguous pool managed dir
   where $P$ is the parameter count, $L$ is the sequence length, and $d_{\text{model}}$ is the hidden dimension.
 * **MFU (Model FLOPs Utilization)**: The ratio of achieved compute performance (TFLOPs/sec) to the hardware's peak theoretical performance. It is the gold standard for measuring GPU execution efficiency.
   * **RTX 4070 Super Peak FP16 Performance**: $\approx 142.2\text{ TFLOPs/sec}$.
+    > [!NOTE]
+    > **Deriving the 142.2 TFLOPs/sec Peak:**
+    > Databases like TechPowerUp list the RTX 4070 Super's **Half Precision (FP16)** performance as **71.09 TFLOPS** and the **Tensor Core** performance as **284.4 TFLOPS** (sparse). 
+    > - The **71.09 TFLOPS** figure represents standard vector operations on CUDA cores (non-tensor), which is twice the FP32 rate.
+    > - The **284.4 TFLOPS** figure assumes **2:4 structured sparsity** (where 50% of the weights are zeroed out and skipped).
+    > - Because standard neural networks (including this implementation) are **dense**, they run on the dense Tensor Core pipeline. The theoretical dense peak is exactly half of the sparse peak:
+    >   $$\text{Dense Peak Tensor FP16} = \frac{284.4\text{ TFLOPS}}{2} = 142.2\text{ TFLOPS}$$
   * If your training code achieves $1.42\text{ TFLOPs/sec}$, your MFU is $\approx 1\%$. 
   * Low MFU (very common with small batch sizes or short sequence lengths) indicates that the GPU is underutilized, usually because it is waiting for CPU kernel launches (overhead-bound) or reading/writing to memory (memory-bound).
 
