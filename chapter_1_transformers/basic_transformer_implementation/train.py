@@ -110,8 +110,8 @@ def train_lm(train_dataset: ShakespeareDataset, val_dataset: ShakespeareDataset,
     num_epochs = 10
     learning_rate = 1e-3
     
-    # RTX 4070 Peak Theoretical FP16 Tensor Performance = 121.3 TFLOPs/sec
-    PEAK_TFLOPS = 121.3
+    # RTX 4070 Super Peak Theoretical FP16 Tensor Performance = 142.2 TFLOPs/sec
+    PEAK_TFLOPS = 142.2
 
     print(f"Training parameters: d_model={d_model}, nhead={nhead}, num_layers={num_layers}, vocab_size={vocab_size}")
 

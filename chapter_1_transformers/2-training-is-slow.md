@@ -29,8 +29,8 @@ When running models on a GPU, memory is not a single contiguous pool managed dir
   $$\text{FLOPs per Token} \approx 6P + 12 \times \text{layers} \times L \times d_{\text{model}}$$
   where $P$ is the parameter count, $L$ is the sequence length, and $d_{\text{model}}$ is the hidden dimension.
 * **MFU (Model FLOPs Utilization)**: The ratio of achieved compute performance (TFLOPs/sec) to the hardware's peak theoretical performance. It is the gold standard for measuring GPU execution efficiency.
-  * **RTX 4070 Peak FP16 Performance**: $\approx 121.3\text{ TFLOPs/sec}$.
-  * If your training code achieves $1.2\text{ TFLOPs/sec}$, your MFU is $\approx 1\%$. 
+  * **RTX 4070 Super Peak FP16 Performance**: $\approx 142.2\text{ TFLOPs/sec}$.
+  * If your training code achieves $1.42\text{ TFLOPs/sec}$, your MFU is $\approx 1\%$. 
   * Low MFU (very common with small batch sizes or short sequence lengths) indicates that the GPU is underutilized, usually because it is waiting for CPU kernel launches (overhead-bound) or reading/writing to memory (memory-bound).
 
 ---
