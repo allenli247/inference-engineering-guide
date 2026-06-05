@@ -1,6 +1,6 @@
 # Hardware Utilization Probing: Measuring Training Efficiency
 
-When building and scaling large models, training speed is the primary bottleneck. However, "training is slow" is not an actionable complaint. To optimize training runs, we must treat the hardware (your NVIDIA RTX 4070 GPU) as a system and actively profile its utilization. This process is called **hardware utilization probing**.
+When building and scaling large models, training speed is the primary bottleneck. For many graduate students, "training is slow" is a frequent but unactionable complaint. To optimize training runs, we must treat the hardware (in my case, the NVIDIA RTX 4070 Super GPU) as a system and actively profile its utilization. This process is called **hardware utilization probing**.
 
 In this section, we introduce the core concepts of memory and compute profiling, explain the PyTorch and CUDA APIs used to measure them, and walk through our metric-gathering workflow.
 
@@ -15,14 +15,13 @@ When running models on a GPU, memory is not a single contiguous pool managed dir
 * **Reserved (Cached) Memory**: The VRAM that PyTorch's allocator has requested from the CUDA driver and is keeping in a cache. If you delete a tensor, the memory is freed from "Allocated" but remains "Reserved" so PyTorch can reuse it immediately without the heavy overhead of requesting memory from the OS again.
 
 > [!WARNING]
-> If your **Allocated Memory** exceeds your GPU's total VRAM (12 GB on the RTX 4070), you will trigger an **Out of Memory (OOM)** crash. Understanding peak allocated VRAM helps you size your maximum batch size and sequence lengths.
+> If your **Allocated Memory** exceeds your GPU's total VRAM (12 GB VRAM on my RTX 4070 Super), you will trigger an **Out of Memory (OOM)** crash. Understanding peak allocated VRAM helps you size your maximum batch size and sequence lengths.
 
 ### B. Throughput vs. Goodput
 * **Throughput**: The total number of tokens (characters, words, or subwords) processed by the hardware per second.
 * **Goodput**: The rate of *useful* tokens processed per second that actually contribute to gradient updates and learning.
 
-> [!NOTE]
-> In variable-length batches, shorter sequences are padded with `<pad>` tokens to match the longest sequence in the batch. While these padding tokens are computed in the forward and backward passes (consuming FLOPs and GPU cycles), their gradients are masked out. Thus, padding tokens contribute to **Throughput** but are excluded from **Goodput**. Minimizing this gap is a key optimization.
+The major gap between throughput and goodput is that throughput involves all calculations and communications, even stalled communications and job retries whereas goodput measures only the actions that contributed directly to successful training (gradient updates) and successful inference (serving the model output to users). This gap may arise from poorly optimized data pipelines (causing stalled communication), excessive synchronization, and redundant computation.
 
 ### C. FLOPs and Model FLOPs Utilization (MFU)
 * **FLOPs (Floating Point Operations)**: The total number of arithmetic operations (adds and multiplies) executed during training. We estimate this using a standard formula for the forward and backward pass:
