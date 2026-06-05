@@ -40,6 +40,15 @@ When running models on a GPU, memory is not a single contiguous pool managed dir
   * If your training code achieves $1.42\text{ TFLOPs/sec}$, your MFU is $\approx 1\%$. 
   * Low MFU (very common with small batch sizes or short sequence lengths) indicates that the GPU is underutilized, usually because it is waiting for CPU kernel launches (overhead-bound) or reading/writing to memory (memory-bound).
 
+### D. Memory Bandwidth and Arithmetic Intensity
+* **Memory Bandwidth**: The rate at which the GPU cores can read from or write to the high-bandwidth VRAM. For the RTX 4070 Super, this peak rate is **504 GB/s**.
+* **Arithmetic Intensity**: Measured in FLOPs/Byte, this is the ratio of compute operations to memory traffic:
+  $$\text{Arithmetic Intensity} = \frac{\text{Floating Point Operations (FLOPs)}}{\text{Memory Traffic (Bytes)}}$$
+* **Memory Traffic**: The total number of bytes read from or written to global VRAM:
+  - **Parameter & Gradient Traffic**: Each weight must be read during forward and backward passes. Gradients must be written. For FP32 parameters using the Adam optimizer, this equals $40 \times P$ bytes per step (including weights, gradients, and momentum/variance tracking states).
+  - **Activation Traffic**: Intermediate activations are written during the forward pass and read during the backward pass (totaling $2 \times \text{Activation Size}$ bytes).
+* **The Roofline Model**: A visualization tool mapping achieved performance (TFLOPs/sec) vs. arithmetic intensity. The "ridge point" is the boundary where the workload shifts from being **Memory-Bound** (waiting for data to transfer from VRAM) to **Compute-Bound** (waiting for math operations on the core execution units).
+
 ---
 
 ## 2. Profiling Syntax and Commands
@@ -92,5 +101,34 @@ Our metric logging workflow is implemented in [`train.py`](file:///root/inferenc
    * Run the forward, backward, and optimization steps.
    * Synchronize GPU and stop the step timer.
    * Calculate FLOPs for the step and throughput/goodput tokens.
-3. **Epoch Aggregation**: Average the step metrics, query PyTorch for peak VRAM usage, calculate MFU based on the RTX 4070 peak limit (121.3 TFLOPs/sec), and export these statistics to `metrics.json`.
-4. **Interactive Plotting**: Load `metrics.json` in [`visualize_metrics.ipynb`](file:///root/inference-engineering-guide/chapter_1_transformers/basic_transformer_implementation/visualize_metrics.ipynb) to inspect interactive plots of compute efficiency and memory footprints using Plotly.
+3. **Epoch Aggregation**: Average the step metrics, query PyTorch for peak VRAM usage, calculate MFU based on the RTX 4070 Super peak limit (142.2 TFLOPs/sec), estimate memory bandwidth and arithmetic intensity, and export these statistics to `metrics.json`.
+4. **Interactive Plotting**: Load `metrics.json` in [`visualize_metrics.ipynb`](file:///root/inference-engineering-guide/chapter_1_transformers/basic_transformer_implementation/visualize_metrics.ipynb) to inspect interactive plots of compute efficiency, memory footprints, and the Roofline Model using Plotly.
+
+---
+
+## 4. Why Hasn't Our Training Maximized GPU Performance?
+
+During our training runs, we achieved compute performance of **~0.5 TFLOPs/sec**, representing a Model FLOPs Utilization (MFU) of **~0.4%** relative to the RTX 4070 Super's peak dense Tensor FP16 performance (142.2 TFLOPs/sec) and **~1.4%** relative to the peak FP32 vector performance (35.5 TFLOPs/sec). 
+
+Here is why our training pipeline is heavily bottlenecked and how these factors contribute to memory and compute underutilization:
+
+### A. The Model is Extremely Small (Cache vs. VRAM Traffic)
+Our network has only $412,737$ parameters ($\approx 1.65$ MB in FP32). 
+* **Cache Fit**: Modern GPUs (like the RTX 4070 Super, which has 48 MB of L2 cache) can fit the entire set of weights, gradients, and optimizer states directly inside the fast on-chip L2 cache. 
+* **Underutilized Memory Bus**: Because the parameters are cached on-chip, the GPU doesn't actually need to fetch them from VRAM. The global VRAM bandwidth (504 GB/s) is never saturated.
+
+### B. Severe Thread Starvation (GPU Core Underutilization)
+A GPU thrives on massive parallelism. To hide execution latency, it needs thousands of concurrent threads grouped into thread blocks to populate all 56 Streaming Multiprocessors (SMs).
+* **Suboptimal Batching**: Our batch size of 64 and sequence length of 20 equals $1,280$ tokens per step. 
+* **Tiny Matrices**: The matrix multiplications (GEMMs) in our projection layers are very small (e.g., multiplying matrices of size $1280 \times 128$ and $128 \times 128$). Small matrix multiplications generate too few thread blocks, leaving most of the GPU's CUDA cores and Tensor Cores completely idle.
+
+### C. Domination of Memory-Bound Operations
+In small models, a huge percentage of the total math operations are **element-wise** rather than large matrix multiplications:
+* **Memory-Bound Kernels**: Operations like LayerNorm, Softmax, GELU, residual additions, and Dropout require reading a tensor from VRAM, performing a single simple math operation (like addition or exponentiation), and writing it back to VRAM.
+* **Low Arithmetic Intensity**: These kernels have an arithmetic intensity of less than 1 FLOP/Byte. The GPU cores spend nearly 100% of their time waiting for memory transfers, resulting in low TFLOPs/sec.
+
+### D. Host-to-Device Bottlenecks & CPU Launch Overhead
+Because our GPU execution times are so short (each batch takes less than $1$ millisecond of actual GPU compute time), the pipeline is bottlenecked by the CPU:
+* **Python Interpreter Latency**: Python executes code line-by-line, which takes time.
+* **Kernel Launch Overhead**: The CPU takes $3$ to $10$ microseconds to launch a single GPU kernel via the CUDA driver. Since a single training step consists of dozens of small kernel launches (for embeddings, projections, attention, normalizations, and optimizer steps), the launch overhead dominates the step duration.
+* **Data Transfer**: Transferring input batches from CPU RAM to GPU VRAM over the PCIe bus introduces latency for every batch, which is visible since the GPU finishes the computation almost instantly.

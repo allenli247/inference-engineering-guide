@@ -65,6 +65,50 @@ def estimate_batch_flops(batch_size: int, seq_len: int, num_params: int, num_lay
     return total_tokens * flops_per_token
 
 
+def estimate_step_memory_traffic(num_params: int, batch_size: int, seq_len: int, num_layers: int, d_model: int, dim_feedforward: int, nhead: int) -> float:
+    """
+    Analytically estimate VRAM memory traffic (bytes read/written) per training step.
+    Assuming FP32 precision and Adam optimizer.
+    """
+    # 1. Parameter traffic:
+    # Forward: read weights (4 * P)
+    # Backward: read weights (4 * P) + write gradients (4 * P)
+    # Optimizer: read weights (4 * P) + read gradients (4 * P) + read/write momentum (8 * P) + read/write variance (8 * P) + write updated weights (4 * P)
+    # Total parameter traffic = 40 * P
+    param_traffic = 40.0 * num_params
+
+    # 2. Activation traffic (FW write + BW read = 2 * Activation size):
+    # Embeddings output: B * L * d_model * 4 bytes
+    emb_act = batch_size * seq_len * d_model * 4.0
+
+    # Layer activations:
+    layer_act = 0.0
+    for _ in range(num_layers):
+        # QKV projection inputs: 3 * B * L * d_model * 4 bytes
+        qkv_in = 3.0 * batch_size * seq_len * d_model * 4.0
+        # Attention scores matrix (before softmax): B * nhead * L * L * 4 bytes
+        attn_matrix = batch_size * nhead * seq_len * seq_len * 4.0
+        # Attention output projection input: B * L * d_model * 4 bytes
+        attn_out = batch_size * seq_len * d_model * 4.0
+        # MLP hidden layer output (dim_feedforward): B * L * dim_feedforward * 4 bytes
+        mlp_in = batch_size * seq_len * dim_feedforward * 4.0
+        # MLP output projection input: B * L * d_model * 4 bytes
+        mlp_out = batch_size * seq_len * d_model * 4.0
+        
+        layer_act += (qkv_in + attn_matrix + attn_out + mlp_in + mlp_out)
+
+    total_activations = emb_act + layer_act
+    # Memory traffic requires writing activations in forward and reading them back in backward
+    activation_traffic = 2.0 * total_activations
+
+    # 3. Input & Label data traffic (negligible but included for completeness):
+    # Inputs (ints): B * L * 4 bytes
+    # Targets (ints): B * L * 8 bytes (since target could be long in cross entropy targets)
+    io_traffic = batch_size * seq_len * 4.0 + batch_size * seq_len * 8.0
+
+    return param_traffic + activation_traffic + io_traffic
+
+
 def evaluate(model: nn.Module, dataloader: DataLoader, device: torch.device, vocab_size: int):
     """
     Evaluate perplexity and accuracy on dev/validation set using the data loader
@@ -147,7 +191,9 @@ def train_lm(train_dataset: ShakespeareDataset, val_dataset: ShakespeareDataset,
         "peak_vram_allocated_mb": [],
         "peak_vram_reserved_mb": [],
         "tflops_per_sec": [],
-        "mfu_percent": []
+        "mfu_percent": [],
+        "memory_bandwidth_gb_sec": [],
+        "arithmetic_intensity": []
     }
 
     # Reset peak memory stats before training
@@ -225,6 +271,20 @@ def train_lm(train_dataset: ShakespeareDataset, val_dataset: ShakespeareDataset,
         tflops_sec = (avg_step_flops / avg_step_time) / 1e12 if avg_step_time > 0 else 0.0
         mfu = (tflops_sec / PEAK_TFLOPS) * 100
 
+        # Estimate memory traffic and bandwidth
+        step_memory_traffic = estimate_step_memory_traffic(
+            num_params=num_params,
+            batch_size=batch_size,
+            seq_len=chunk_size,
+            num_layers=num_layers,
+            d_model=d_model,
+            dim_feedforward=dim_feedforward,
+            nhead=nhead
+        )
+        # memory bandwidth in GB/s = traffic_bytes / step_time / 1e9
+        memory_bandwidth_gb_sec = (step_memory_traffic / avg_step_time) / 1e9 if avg_step_time > 0 else 0.0
+        arithmetic_intensity = avg_step_flops / step_memory_traffic if step_memory_traffic > 0 else 0.0
+
         # VRAM stats
         peak_vram_allocated = 0.0
         peak_vram_reserved = 0.0
@@ -244,6 +304,8 @@ def train_lm(train_dataset: ShakespeareDataset, val_dataset: ShakespeareDataset,
         history["peak_vram_reserved_mb"].append(peak_vram_reserved)
         history["tflops_per_sec"].append(tflops_sec)
         history["mfu_percent"].append(mfu)
+        history["memory_bandwidth_gb_sec"].append(memory_bandwidth_gb_sec)
+        history["arithmetic_intensity"].append(arithmetic_intensity)
 
         print(f"Epoch {epoch+1:02d}/{num_epochs:02d} | "
               f"Train Loss: {avg_loss:.4f} | "
@@ -251,7 +313,9 @@ def train_lm(train_dataset: ShakespeareDataset, val_dataset: ShakespeareDataset,
               f"Dev Acc: {dev_acc:.3%} | "
               f"TFLOPs: {tflops_sec:.4f} | "
               f"MFU: {mfu:.3f}% | "
-              f"VRAM: {peak_vram_allocated:.1f}MB")
+              f"VRAM: {peak_vram_allocated:.1f}MB | "
+              f"Bandwidth: {memory_bandwidth_gb_sec:.4f} GB/s | "
+              f"Intensity: {arithmetic_intensity:.4f} FLOPs/B")
 
         # Save statistics to a version-controlled JSON file at the end of each epoch
         metrics_path = os.path.join(os.path.dirname(__file__), "metrics.json")
