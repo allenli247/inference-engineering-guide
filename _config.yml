@@ -1,0 +1,9 @@
+title: Inference Engineering Guide
+description: Technical documentation, hardware optimization, and LLM inference tuning guides.
+theme: jekyll-theme-primer
+include:
+  - "technical_docs"
+markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
