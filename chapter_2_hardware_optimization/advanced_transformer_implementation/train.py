@@ -24,8 +24,10 @@ from chapter_2_hardware_optimization.advanced_transformer_implementation.transfo
 if torch.cuda.is_available():
     print("CUDA available, using GPU")
     device = torch.device("cuda")
+elif torch.mps.is_available():
+    print("MPS is available")
 else:
-    print("CUDA not available, using CPU")
+    print("CUDA and MPS not available, using CPU")
     device = torch.device("cpu")
 
 

@@ -1,16 +1,19 @@
 # High-Throughput & Low-Latency LLM Agent Deployment: Tuning Qwen on vLLM & Blackwell
 
-An engineering guide to optimizing open-weight LLM inference for asynchronous agent workloads using vLLM on modern GPU architectures.
+An engineering guide to optimizing open-weight LLM inference using vLLM on the NVIDIA Blackwell GPU architecture.
 
 ---
 
-## 1. Production Context & Workload Profile
+## 1. Production Context 
 
-Deploying Large Language Models (LLMs) for enterprise agentic workflows introduces a fundamental engineering challenge: **asynchronous, bursty query patterns with complex tool definitions**. Unlike traditional batch processing or high-concurrency chatbot applications, autonomous LLM agents spend long periods waiting for host signals, followed by abrupt executions requiring multi-step tool calls.
+Our goal for this writeup is two-part
 
-### The ETF Lab Deployment Topology
+1. Understand mechanics of LLMs as they relate to the GPU, in particular, attention mechanisms during inference, quantization and KV-caching. 
+2. Document our process of tuning Qwen on vLLM on the NVIDIA Blackwell architecture, irrespective of the types of workflows we are currently running and how to optimize our deployments on our RTX 6000 Pro Blackwell GPU.
 
-In our **ETF (Enterprise Testing Facility) Lab**, an infrastructure agent monitors several dozen physical and virtual hosts. The agent analyzes host telemetry (CPU spikes, memory saturation, thermal throttling, network dropouts) and issues targeted remediation commands using structured tool calling.
+### The ETF Lab Deployment Topology and SRE Agent Workflow
+
+In our **ETF (Enterprise Testing Facility) Lab**, an infrastructure agent monitors several dozen hosts. The agent analyzes host telemetry (CPU spikes, memory saturation, thermal throttling, network dropouts) and issues targeted remediation commands using structured tool calling.
 
 ```
                     ┌─────────────────────────────────────────┐
@@ -24,8 +27,8 @@ In our **ETF (Enterprise Testing Facility) Lab**, an infrastructure agent monito
 │                              (~97 GB Total VRAM)                                │
 │                                                                                 │
 │   ┌────────────────────────────────────────┐   ┌────────────────────────────┐   │
-│   │           vLLM Engine Replica          │   │      TEI via NVIDIA MPS    │   │
-│   │                                        │   │   (Text Embeddings Inference)│   │
+│   │           vLLM Engine Replica          │   │     TEI via NVIDIA MPS     │   │
+│   │                                        │   │ (Text Embeddings Inference)│   │
 │   │  Model: Qwen3.6-35B-A3B (FP8)          │   │                            │   │
 │   │  vLLM Config:                          │   │  Allocation: ~8 GB VRAM    │   │
 │   │   - max-model-len: 131,072             │   │                            │   │
@@ -45,12 +48,12 @@ In our **ETF (Enterprise Testing Facility) Lab**, an infrastructure agent monito
 * **Co-located Services:** Text Embeddings Inference (TEI) running on the same GPU via NVIDIA Multi-Process Service (MPS), consuming **~8 GB VRAM**.
 * **vLLM Parameters:**
   * `max-model-len`: `131072` (128k context window capacity)
-  * `gpu-memory-utilization`: `0.60` (reserving 60% of GPU memory for vLLM)
+  * `gpu-memory-utilization`: `0.60` (reserving 60% of GPU memory for weights and vLLM)
   * `max-num-seqs`: `512`
   * `enable-prefix-caching`: `True`
   * `enable-auto-tool-choice`: `True`
 
-### The Underutilization Paradox
+### vLLM Parameters Explained and Memory Space of Token Sequences
 
 With `gpu-memory-utilization` set conservatively to `0.60`, vLLM allocates **~58.2 GB** out of the 97 GB total VRAM. After holding ~35 GB for FP8 model weights, the remaining KV cache memory pool is constrained. Because the monitoring agent triggers infrequently, the GPU compute engines sit idle most of the time.
 
@@ -62,7 +65,7 @@ This introduces a core architectural trade-off:
 
 ## 2. Model Architecture & Numeric Precision Mechanics
 
-To make informed tuning decisions, we must analyze the structural differences between **Qwen 3.6-35B-A3B** and the newer **Qwen 3.8-27B**, alongside the physics of low-precision floating-point formats.
+To make informed tuning decisions, we also consider the structural differences between **Qwen 3.6-35B-A3B** and the newer **Qwen 3.8-27B**.
 
 ### Qwen Architectural Comparison
 
